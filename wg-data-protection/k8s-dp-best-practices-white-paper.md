@@ -1,5 +1,5 @@
 # Kubernetes Data Protection: Best Practices
-Kubernetes applications are commonly including state today.  With state comes the need to protect data.  When we talk about data protection in this context, we are talking about keeping data safe against problems such as hardware failure, corruption, accidental deletion, ransomware and other issues that can prevent your application from functioning correctly.
+Kubernetes applications commonly include state today.  With state comes the need to protect data.  When we talk about data protection in this context, we are talking about keeping data safe against problems such as hardware failure, corruption, accidental deletion, ransomware and other issues that can prevent your application from functioning correctly.
 
 Data protection can take multiple approaches, the most common are backup/restore and replication.  For either approach, the application must be ready on some basic level to be protected.  In this white paper we outline common scenarios for backup/restore and replication, how this affects applications and how the application can be designed to get best results in the event that disaster strikes.
 
@@ -28,14 +28,25 @@ Data protection can take multiple approaches, the most common are backup/restore
       - [Export to object storage](#export-to-object-storage)
     + [Kubernetes resource backup](#kubernetes-resource-backup)
       - [External storage backup](#external-storage-backup)
+        * [Identify and Classify External Data Dependencies](#identify-and-classify-external-data-dependencies)
+        * [Align Backup Strategy with Service Ownership](#align-backup-strategy-with-service-ownership)
+        * [Native Service Backups and Snapshots](#native-service-backups-and-snapshots)
+        * [Cross-Region and Cross Account Protection](#cross-region-and-cross-account-protection)
+        * [Restore Testing and Application Consistency](#restore-testing-and-application-consistency)
+        * [Security and Access Control](#security-and-access-control)
     + [Quiescing](#quiescing)
     + [Completeness](#completeness)
       - [Persistent Volumes (PVs)](#persistent-volumes-pvs)
       - [Kubernetes resources](#kubernetes-resources)
         * [Custom Resource Definitions (CRDs) and versioning](#custom-resource-definitions-crds-and-versioning)
+          + [CRD Versioning](#crd-versioning)
         * [Network ingresses and addresses](#network-ingresses-and-addresses)
       - [External resources](#external-resources)
       - [Backup windows and Application Consistency](#backup-windows-and-application-consistency)
+        * [Application Consistency](#application-consistency)
+        * [Backup Scheduling and Workload Impact](#backup-scheduling-and-workload-impact)
+        * [Coordination with Kubernetes Operators](#coordination-with-kubernetes-operators)
+        * [Backup Scheduling and Recovery Objectives](#backup-scheduling-and-recovery-objectives)
       - [SLA (can we guarantee SLAs during backups?)](#sla-can-we-guarantee-slas-during-backups)
     + [Restore](#restore)
       - [Recovering from a crash](#recovering-from-a-crash)
@@ -63,10 +74,10 @@ Data protection can take multiple approaches, the most common are backup/restore
   * [Verification and Cyber Recovery Drills](#verification-and-cyber-recovery-drills)
 - [How to define the boundaries of an application for data protection](#how-to-define-the-boundaries-of-an-application-for-data-protection)
 - [Scenarios to expect](#scenarios-to-expect)
-  * [Restore to same cluster](#restore-to-same-cluster)
+  * [Restore to the same cluster](#restore-to-the-same-cluster)
     + [Handling PVC Name Collisions When Restoring to the Same Cluster](#handling-pvc-name-collisions-when-restoring-to-the-same-cluster)
     + [Custom Resource Definitions](#custom-resource-definitions)
-      - [Best Practices:](#best-practices)
+    + [Best Practices](#best-practices)
   * [Restore to a different cluster](#restore-to-a-different-cluster)
   * [Restore for testing](#restore-for-testing)
   * [Restore for migration](#restore-for-migration)
@@ -87,7 +98,7 @@ Data protection can take multiple approaches, the most common are backup/restore
   * [Best practices when moving existing applications into Kubernetes](#best-practices-when-moving-existing-applications-into-kubernetes)
     + [Virtual machines](#virtual-machines)
   * [Key considerations when migrating from a legacy environment to Kubernetes](#key-considerations-when-migrating-from-a-legacy-environment-to-kubernetes)
-    + [Persistent Volume Snapshots as replacement for VM DIsk Snapshots](#persistent-volume-snapshots-as-replacement-for-vm-disk-snapshots)
+    + [Persistent Volume Snapshots as replacement for VM Disk Snapshots](#persistent-volume-snapshots-as-replacement-for-vm-disk-snapshots)
 
 <!-- tocstop -->
 
@@ -161,7 +172,7 @@ Backing up and restoring data at the file level is another way to protect the co
 
 Many storage systems have the ability to track which blocks have changed between two snapshots.  CBT enables a backup application to efficiently make incremental backups since only the changed data needs to be backed up.  On restore, the backup application will combine a full backup with subsequent incremental backups to restore the volume as a whole.
 
-The Data Protection Working Group has standardized how to expose this to backup applications for Kubernetes with KEP-3314 ([https\://github.com/kubernetes/enhancements/blob/master/keps/sig-storage/3314-csi-changed-block-tracking/README.md](https://github.com/kubernetes/enhancements/blob/master/keps/sig-storage/3314-csi-changed-block-tracking/README.md))  and implementations are underway.
+The Data Protection Working Group has standardized how to expose this to backup applications for Kubernetes with KEP-3314 ([https\://github.com/kubernetes/enhancements/blob/master/keps/sig-storage/3314-csi-changed-block-tracking/README.md](https://github.com/kubernetes/enhancements/blob/master/keps/sig-storage/3314-csi-changed-block-tracking/README.md)) and implementations are underway.
 
 ##### Volume Group Snapshotting
 
@@ -173,7 +184,7 @@ This process refers to a tailored strategy that is unique to data structures and
 
 Approaches to application specific backup usually involve application specific utilities or commands that cause data to be protected.  This might involve an internal snapshot, or export to a file or an object store.
 
-In addition to triggering the application specific backup/restore flows, it is also important to synchronize the backup with the overall Kubernetes backup and to manage and protect the backup artifacts.  If the application's data is being stored in Kubernetes PVs, those PVs should be excluded from the overall backup since the application specific backup would already be protecting the data..
+In addition to triggering the application specific backup/restore flows, it is also important to synchronize the backup with the overall Kubernetes backup and to manage and protect the backup artifacts.  If the application's data is being stored in Kubernetes PVs, those PVs should be excluded from the overall backup since the application specific backup would already be protecting the data.
 
 #### Triggering mechanisms
 
@@ -200,7 +211,7 @@ Kubernetes resources depend on other resources through direct and indirect relat
 
 Understanding Kubernetes Resources
 
-* Core Resources: Pods, Deployments, Services,Replica Sets, Stateful Sets  
+* Core Resources: Pods, Deployments, Services, Replica Sets, Stateful Sets  
 * Configuration Resources : Config Maps, Secrets \-hold environmental variables, configuration files, or sensitive credentials.  
 * Storage Resources: Persistent Volume Claims (PVCs) and associated Persistent Volumes (PVs) contain the actual application data.  
 * Custom resources: CRDs and Operator-managed resources extend kubernetes with domain-specific objects.
@@ -216,53 +227,47 @@ Backup Strategies
 3.  Resource Type Segmentation   
 * Some team may choose to backup stateful resources (PVCs, CRDs) separate from stateless  resources (Deployment, Services)
 
-
 4. Challenges and Considerations
 
 Kubernetes resource backup is a critical part of disaster recovery that involves capturing the state of your Kubernetes resources so that you may confidently restore them in event of data loss.
 
 #### External storage backup
 
-Kubernetes workloads often operate on data stored outside the cluster boundary. External data includes databases, object storage services, Saas platforms and external file systems. While Kubernetes-native backup tools protect cluster resources using PVC’s, Deployments, and Custom Resource Definitions (CRDs), they do not automatically safeguard external hosted data sources. 
+Kubernetes workloads often operate on data stored outside the cluster boundary. External data includes databases, object storage services, SaaS platforms and external file systems. While Kubernetes-native backup tools protect cluster resources using PVCs, Deployments, and Custom Resource Definitions (CRDs), they do not automatically safeguard external hosted data sources. 
 
 Data protection strategies must incorporate explicit provisions for these external dependencies.
 
-1. Identify and Classify External Data Dependencies  
-     
-   Organizations should inventory all  external data sources accessed by Kubernetes workloads before defining backup mechanisms. These commonly include:   
-     
+##### Identify and Classify External Data Dependencies  
+
+Organizations should inventory all external data sources accessed by Kubernetes workloads before defining backup mechanisms. These commonly include:   
+
 * Managed Databases   
 * Object Storage   
-* Third party Saas platforms  
+* Third party SaaS platforms  
 * Shared filesystems 
 
-             
-            Each dependency should be classified based on:
+Each dependency should be classified based on:
 
 * Recovery Time Objective (RTO)  
 * Recovery Point Objective (RPO)  
 * Regulatory or compliance requirements  
-    
-  (see the section "Identify the Value, Cost, and Impact of Data Loss or downtime" for more information)
 
-2. Align Backup Strategy with Service Ownership  
-   External systems are often managed by separate teams or cloud providers. Responsibility for backup configuration must be clearly defined within the organization’s framework.   
-     
-     
-   Key Considerations:  
-     
-* Is backup responsibility owned  by the operation team or delegated to the cloud provider?  
+(see the section "Identify the Value, Cost, and Impact of Data Loss or downtime" for more information)
+
+##### Align Backup Strategy with Service Ownership  
+External systems are often managed by separate teams or cloud providers. Responsibility for backup configuration must be clearly defined within the organization’s framework.   
+
+Key Considerations:  
+
+* Is backup responsibility owned by the operations team or delegated to the cloud provider?  
 * Are backups enabled by default or should they be explicitly configured?
-
-
-  
 
 Assumptions that the cloud provider handles backups often results in gaps. Managed services often provide backup capabilities but not enforced protection  policies.
 
-3. Native Service Backups and Snapshots  
-     
-   Utilize the native backup capabilities of the external system whenever possible:  
-     
+##### Native Service Backups and Snapshots  
+
+Utilize the native backup capabilities of the external system whenever possible:  
+
 * Automate database snapshots  
 * Point-in-time Recovery (PITR)  
 * Object Versioning and life cycle policies   
@@ -270,41 +275,29 @@ Assumptions that the cloud provider handles backups often results in gaps. Manag
 
 As a reminder, backup verification procedures should be established. Backup alone does not guarantee recoverability. 
 
-4. Cross-Region and Cross Account Protection
+##### Cross-Region and Cross Account Protection
 
-    Effective protection against regional outages, account compromise or ransomware scenarios requires that backups be stored outside the administrative boundary of the primary data. 
+Effective protection against regional outages, account compromise or ransomware scenarios requires that backups be stored outside the administrative boundary of the primary data. 
 
-   
-
-   
-
-   Recommended Best Practices:
-
-   
+Recommended Best Practices:
 
 * Cross-account backup storage   
 * Cross-region replication  
 * Write once storage configurations  
 * Encryption with managed key rotations policies
 
-5. Restore Testing and Application Consistency  
-     
-   Restoring external data should be tested in coordinations with Kubernetes cluster restoration procedures.    
-     
+##### Restore Testing and Application Consistency  
+
+Restoring external data should be tested in coordination with Kubernetes cluster restoration procedures.    
+
 * Application-level consistency  
 * Schema compatibility during restore   
 * Secret and credential alignment  
 * Endpoint reconfiguration after failover
 
+##### Security and Access Control 
 
-  
-
-
-6. Security and Access Control 
-
-   Backup systems represent high value targets. Access to backup storage systems must follow least privilege principles. Controls should include:
-
-   
+Backup systems represent high value targets. Access to backup storage systems must follow least privilege principles. Controls should include:   
 
 * Role-based access control  
 * Multi-factor authentication   
@@ -323,7 +316,7 @@ Completeness refers to the assurance that all required data has been successfull
 
 Achieving completeness involves more than simply copying data. It requires verifying that essential data, metadata and application state are captured without omission.  It also requires verifying that the backup process  completes successfully without interruption and that the captured data accurately reflects the applications state at the time of the backup.
 
-In Kubernetes environment, completeness may also extend to include backuping up not only the contents of a Persistent Volume but also associated Kubernetes resources such as Persistent Volume Claims, Secrets, Config Maps, Stateful Sets, and other objects needed to fully restore the application. 
+In Kubernetes environment, completeness may also extend to include backing up not only the contents of a Persistent Volume but also associated Kubernetes resources such as Persistent Volume Claims, Secrets, Config Maps, Stateful Sets, and other objects needed to fully restore the application. 
 
 #### Persistent Volumes (PVs)
 
@@ -345,12 +338,12 @@ Advantages:
 * Ideal for general-purpose workloads
 
 Common use cases:  
-  
+
 * Web applications  
 * Shared application data  
-* Configurations Storage  
-    
-  
+* Configuration files  
+
+
 
 
 Block Mode (VolumeMode: Block)
@@ -365,11 +358,11 @@ Advantages:
 * Higher I/O performance   
 * Greater control over storage layout
 
-Common uses cases:
+Common use cases:
 
 * High-Performance databases  
 * Virtual machine disk images  
-* Applications that manage that manage their own file systems  
+* Applications that manage their own file systems  
 * Database clusters
 
 PVs are typically attached in file mode.  This mounts the volume as a file system in the worker node and Pods have the file system mapped into their directory hierarchy.
@@ -388,13 +381,13 @@ Resources in Kubernetes are persistent objects such as Pods, Replica Sets, Deplo
 
 ##### Custom Resource Definitions (CRDs) and versioning
 
-Custom Resource Definitions extend the Kubernetes api by allowing Operators  to define custom resource types that act similarly to native kubernetes resources.  CRDS are commonly used by Kubernetes Operators to represent application specific state, configuration and operational requirements.
+Custom Resource Definitions extend the Kubernetes API by allowing Operators to define Custom Resource types that act similarly to native Kubernetes resources.  CRDs are commonly used by Kubernetes Operators to represent application specific state, configuration and operational requirements.
 
-Since CRDs define the schema and versions of customers resources, CRD versioning is an important consideration  for backup , restore, replication and disaster recovery workflows. A backup system must preserve not only the custom resource instances but also sufficient information about the CRD schema and API version to correctly interpret and restore those resources.
+Since CRDs define the schema and versions of Custom Resources, CRD versioning is an important consideration for backup, restore, replication and disaster recovery workflows. A backup system must preserve not only the custom resource instances but also sufficient information about the CRD schema and API version to correctly interpret and restore those resources.
 
-CRD Versioning 
+###### CRD Versioning 
 
-CRDS define the structure, validation rules, and API versions of custom resources. When a CRD is changed or upgraded, the custom resources that depend on it may also be affected.
+CRDs define the structure, validation rules, and API versions of custom resources. When a CRD is changed or upgraded, the custom resources that depend on it may also be affected.
 
 This is important for backup and restore because a custom resource may have been created using one API version, while the destination cluster may use a newer version. The restore process must therefore ensure that the destination cluster has a compatible CRD and schema before restoring the associated resources.
 
@@ -414,7 +407,7 @@ CRD versioning introduces several considerations for data protection:
   If multiple CRD versions are supported, Kubernetes conversion mechanism may transform resources between versions. Backup and restore solutions should account for whether conversion occurs during the restore process or whether the original is preserved.  
 * Schema evolution can affect compatibility   
   Changes to a CRD schema can introduce or remove fields, modify validation rules, or change the meaning of existing fields. A restore operation  should therefore consider compatibility between the source and destination CRD versions.  
-  
+
 
 
 Backup Strategy 
@@ -434,7 +427,7 @@ Before restoring custom resources, the recovery process should verify:
 * Required conversion configuration is available.  
 * Dependencies required by the custom resources are restored.  
 * The CRD is established and available through the Kubernetes API before dependent resources are restored.  
-  
+
 
 
 ##### Network ingresses and addresses
@@ -446,19 +439,19 @@ Shared resources that might be changed by other applications/users (e.g. RBAC) b
 #### Backup windows and Application Consistency
 Backup windows define the schedule periods and duration of backup operations. Backup scheduling should account for application activity, data consistency requirements as well as recovery point objectives.  For stateful workloads, backup operations may require coordination with application Operators  or quiescing mechanisms to maintain data consistency during backup.
 
-**1\.**  Application Consistency 
+##### Application Consistency 
 
 Stateful applications, such as databases, may continue to process transactions and write data while a backup is in progress. Capturing data during active writes can result in inconsistent backup if related data is captured at different points in time.
 
 Backup procedures should account for application activity and , where necessary , coordinate backup operations with application Operators or quiescing mechanisms to ensure that application data is captured in a consistent state. 
 
-2\. Backup Scheduling and Workload Impact 
+##### Backup Scheduling and Workload Impact 
 
 Backup windows should consider application workload patterns, resource utilization, and the potential impact of backup operations on cluster performance.
 
-Scheduling backups during periods of reduced activity may help minimize resource contention, including CPU, memory, storage, I/), and network bandwidth.
+Scheduling backups during periods of reduced activity may help minimize resource contention, including CPU, memory, storage, I/O, and network bandwidth.
 
-3\. Coordination with Kubernetes Operators 
+##### Coordination with Kubernetes Operators 
 
 Kubernetes Operators may provide application-specific  mechanisms for preparing workloads for backup and restoring them to a functional state. 
 
@@ -466,12 +459,12 @@ These mechanisms may include:
 
 * Temporarily pausing application writes or transactions.  
 * Executing pre-backup and post-backup hooks.  
-* Coordinates database checkpoints or flushing pending writes.  
+* Coordinating database checkpoints or flushing pending writes.  
 * Ensuring applications return to normal operation after backup completion.
 
 The availability and behavior of these mechanisms depend on the application and its Operator. 
 
-4\. Backup Scheduling and Recovery Objectives
+##### Backup Scheduling and Recovery Objectives
 
 Backup Scheduling frequency influences the recovery point achievable following a failure.  
 Backup solutions should account for the time required to complete backup operations and ensure that the backup schedule aligns with the applications (Recovery Point Objective).
@@ -513,7 +506,7 @@ Recovery from an  inconsistent backup may require the use of an earlier known-co
 
 #### Test restores
 
-Test restore verify replication strategies and backups are performing as desired by restoring data from backups or replicated sources. This is a vital component of disaster recovery.
+Test that replication strategies and backups are performing as desired by restoring data from backups or replicated sources. This is a vital component of disaster recovery.  Create tests that verify that the restored data is usable and meets the RPO (Recovery Point Objective).
 
 #### Dynamic vs Static provisioning for Persistent Volumes
 
@@ -616,22 +609,18 @@ A backup is only as good as its proven ability to restore safely under attack co
 
 # Scenarios to expect
 
-## Restore to same cluster
-
-When restoring to the same cluster there is the possibility of PVC with the same name and name space may already exist. This may result in a collision because Kubernetes will not let two PVC’s with the same name coexist. 
-
-Another challenge of same cluster restore is with the Bound state. Usually a PVC is already bound to its PV. If you restore the same PVC spec Kubernetes will not rebind it because the “old” binding is still valid.    
+## Restore to the same cluster
 
 ### Handling PVC Name Collisions When Restoring to the Same Cluster
 
-When restoring an application to the same cluster, a common issue is that a Persistent Volume Claim(PVC) may already exist, leading to name collisions. Kubernetes does not allow two PVCs with the same name in the same namespace, so a restore will fail if not handled properly. 
+When restoring an application to the same cluster, a common issue is that a Persistent Volume Claim (PVC) may already exist, leading to name collisions. Kubernetes does not allow two PVCs with the same name in the same namespace, so a restore will fail if not handled properly. 
 
 1. Detect Existing PVCs:  
    Before restoring, check if PVCs already exist in the target namespace.  
-     
+
 2. Options to Resolve Collisions:  
    Delete existing PVCs if data is obsolete or already backed up.   
-     
+
    Restore with new PVC Names:  
    Use PVC renaming or prefixing during restore to avoid collisions for standalone PVCs.  If the PVC is defined by a Stateful Set it may be necessary to change the Stateful Set naming to avoid PVC collision.
 
@@ -644,10 +633,11 @@ When restoring an application to the same cluster, a common issue is that a Pers
 *    namespace mappings to restore to a new namespace  
 *   volume restore with rename policies to automatically avoid collisions.
 
+Another challenge of same cluster restore is with the Bound state. Usually a PVC is already bound to its PV. If you restore the same PVC spec Kubernetes will not rebind it because the “old” binding is still valid.    
 
 ### Custom Resource Definitions
 
-#### Best Practices:
+### Best Practices
 
 Dry-run restores: Always simulate a restore to detect conflicts without affecting live resources.
 
@@ -681,14 +671,14 @@ Continue to monitor your application as it evolves and see if anything needs to 
 Periodically test your data protection strategy
 
 ## Identify what needs to be protected
-    
+
 The first step in developing data protection strategy is identifying the application data, data dependencies, and configuration that are critical for recovery. Since not all data has the same protection requirements, applications should classify data based on its importance, recovery needs and sensitivity.
 
 Considerations include:
 
-* Application data: Identify databases, objects storage,files and other persistent data generated or consumed by applications.  
+* Application data: Identify databases, object storage, files and other persistent data generated or consumed by applications.  
 * Persistent storage requirements: Ensure all critical application data is stored on persistent volumes (PVs) rather than ephemeral storage. Data stored inside containers or temporary filesystems may be lost when pods are restarted, rescheduled, or recreated.  
-* Application configuration: Protect Kubernetes resources required to rebuild the application environment, including Deployments, Stateful Sets, Config Maps,Secrets, Services, Persistent Volume Claims and Custom Resources.  
+* Application configuration: Protect Kubernetes resources required to rebuild the application environment, including Deployments, Stateful Sets, Config Maps, Secrets, Services, Persistent Volume Claims and Custom Resources.  
 * Data dependencies: Identify relationships between application components. For example, an application may require both a database and associated object storage to be restored together to maintain consistency.  
 * Data consistency requirements: Applications should support crash-consistent recovery. This means that if a failure occurs during operation, restored data should represent a state that the application can safely recover from without corruption 
 
@@ -702,8 +692,8 @@ Important factors include:
 * Recovery Point Objective (RPO): Determines how much data loss is acceptable. Applications requiring minimal data loss may require frequent snapshots, replications or continuous backup mechanisms.  
 * Recovery Time Objective (RTO) Determines how quickly an application must be restored. Critical applications may require automated recovery processes and highly available storage solutions.  
 * Business impact: Consider revenue loss, operational disruption, regulatory requirements  and reputational damage.   
-* Data criticality: Product databases, customer records, and transaction systems typically require stronger protection  than temporary application data or development environments.  
-* Compliance requirements: Certain workloads may require retention policies, encryption,audit trails or geography distributed copies.
+* Data criticality: Production databases, customer records, and transaction systems typically require stronger protection  than temporary application data or development environments.  
+* Compliance requirements: Certain workloads may require retention policies, encryption, audit trails or geographically distributed copies.
 
 ## Appropriate Data Protection
 
@@ -727,7 +717,7 @@ To improve consistency:
 
 * Use storage snapshots that coordinate with the application state.  
 * Quiesce applications when required  
-* Validatee store data can successfully restart the application.
+* Validate stored data can successfully restart the application.
 
 
 Protect Application and Kubernetes Meta Data  
@@ -735,18 +725,17 @@ Backing up only application data is not enough. Recovery may also require Kubern
 
 Protection strategies should include:
 
-* Persistent VolumeClaims  
+* Persistent Volume Claims  
 * Secrets and Config Maps  
-* Stateful Sets and Deployment definitions  
+* Stateful Sets and Deployments
 * Custom Resource Definitions (CRDs)
 
 Persistent data:
 
-* All stateful data must live in Persistent Volumes (PV’s). Applications that write to ephemeral container storage will lose that data on pod restart making any backup strategy ineffective for that data.    
-* Databases, filestores,queues and caches with durable modes should each have a dedicated PVC so they can be snapshotted or backed up independently. 
+* All stateful data must live in Persistent Volumes (PVs). Applications that write to ephemeral container storage will lose that data on pod restart making any backup strategy ineffective for that data.    
+* Databases, filestores, queues and caches with durable modes should each have a dedicated PVC so they can be snapshotted or backed up independently. 
 
 Cluster state:  
-   
 
 * Etcd is the authoritative record for all Kubernetes objects.  Losing etcd without a backup of the resources requires redeploying all of the resources.  GitOps practices may enable easy redeploy of the resources but this should be tested to ensure that all resources are held in GitOps.
 
@@ -768,13 +757,13 @@ Operators are responsible for managing the lifecycle of Kubernetes applications,
 
 1. Quiescing Support  
    Operators should provide a way to temporarily pause or quiesce the managed application. This prevents the Operator from reconciling changes or modifying resources while a backup or restore is in process.   
-     
+
    Quiescing is also important during a response to a cyber attack.  Changes while forensic tools are being used could interfere with understanding an attack.  Containment efforts could be undermined by Operator changes as well.  
-     
+
    Quiescing can include suspending automatic updates, scaling actions or background tasks that could interfere with a consistent backup.  
-     
+
    A quiesced state may include:  
-     
+
 * Suspending scaling operations  
 * Disabling automated upgrades or configurations changes   
 * Preventing scheduled maintenance tasks  
@@ -785,19 +774,19 @@ Once the backup or restore operation completes, the Operator should safely resum
 
 2. Application Aware Backup Hooks  
 Operators should expose hooks or APIs that allow backup applications to perform applications-specific actions, such as committing in-flight transactions, flushing caches, or triggering database dumps. This ensures that backups capture data in a consistent and recoverable state.  
-     
-     
+
+
 Examples include:  
-     
+
 * Pausing write operations  
 * Flushing in-memory cache  
 * Committing or completing in-flight transactions  
 * Triggering database snapshots or checkpoints  
 * Exporting application metadata for recovery  
-    
+
 3. Restore Coordination
 
-During operations. Operators should recognize that  restored Kubernetes resources may temporarily differ from the desired stare maintained by the Operator. Rather than immediately reconciling or replacing restored resources, Operators should support a coordinated restore workflow. 
+During operations. Operators should recognize that  restored Kubernetes resources may temporarily differ from the desired state maintained by the Operator. Rather than immediately reconciling or replacing restored resources, Operators should support a coordinated restore workflow. 
 
 This may include;
 
@@ -835,7 +824,7 @@ Common pre-backup hook tasks include:
 * Flushing application caches and memory buffers to disk  
 * Rolling back or committing  outstanding database transactions  
 * Temporarily pausing  write operations or quiescing file system activity to ensure data consistency   
-* Placing the application into a maintenance or back-up safe mode  
+* Placing the application into a maintenance or backup-safe mode  
 * Coordinating distributed services so all components reach a consistent state before a snapshot is taken
 
 
@@ -873,9 +862,9 @@ Migrating from a VM centric environment into Kubernetes requires a shift in how 
 
 Replacing Traditional VM Snapshots and backups in Kubernetes environment. Traditional VM snapshots and backup strategies are designed for monolithic infrastructure where applications, operating systems and data are tightly coupled in a single image. Kubernetes introduces a fundamental model based on containerized work loads, declarative configuration and decoupled state.  As a result, VM-centric protection mechanisms are neither sufficient nor optimal for Kubernetes.
 
-In Kubernetes the functional equivalents of VM snapshots and backups are achieved through a combination of persistent data protection,declarative configuration management and control plan preservation. 
+In Kubernetes the functional equivalents of VM snapshots and backups are achieved through a combination of persistent data protection, declarative configuration management and control plane preservation. 
 
-### Persistent Volume Snapshots as replacement for VM DIsk Snapshots
+### Persistent Volume Snapshots as replacement for VM Disk Snapshots
 
 VM snapshots capture the entire disk state of a machine, including the operating system and application binaries. In Kubernetes node operating systems are considered disposable infrastructure and application binaries are stored in container images.
 
@@ -888,11 +877,11 @@ Kubernetes environments instead require protection of the following components:
 
 * Kubernetes resource manifest (Deployments, Stateful Sets, Services, etc.)  
 * Configuration data (Config Maps and Secrets)  
-* Persist Volumes and associated storage metadata  
+* Persistent Volumes and associated storage metadata  
 * Application-level state, such as message queues  
 * Namespace and cluster metadata
 
-This approach shifted protection from infrastructure to application state. Recovery involves redeploying workloads from declarative definitions and restoring persistent data,rather than restoring entire machines.
+This approach shifted protection from infrastructure to application state. Recovery involves redeploying workloads from declarative definitions and restoring persistent data, rather than restoring entire machines.
 
 Rethinking VM Snapshots in Kubernetes:
 
@@ -913,16 +902,16 @@ Instead snapshot and backup responsibilities are distributed across layers.
 Kubernetes replacement for VM snapshot and backup.
 
 1. Persistent Volume (PV) snapshots  
-   What is replaces:  
+   What it replaces:  
    VM disk snapshots  
-     
+
    How it works in Kubernetes:  
-     
+
 * Kubernetes supports CSI Snapshot at the storage level.  
 * Snapshots are taken per Persistent Volume Claim (PVC), not per workload  
 * Snapshot behavior depends on underlying storage provider
 
-      
+
 Operational Considerations:
 
 * Multi-volume applications may require coordinated snapshots  

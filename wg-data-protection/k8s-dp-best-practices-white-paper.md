@@ -194,7 +194,7 @@ Some applications will export a backup to an object store bucket.  Ideally the o
 ### Kubernetes resource backup
 
 Kubernetes applications are composed of more than just containers and pods. These applications rely on a complex set of resources such as Deployments, Stateful Sets, Config Maps, Secrets, Custom Resources Definitions (CRDs) and Persistent Volume (PVs). Backing up these resources ensures that the application’s state configuration, and runtime configuration can be fully restored after migration, failure or disaster.  
-Backing up Kubernetes resources introduces challenges that do not exist in traditional VM based data protection because Kubernetes workloads consist of multiple independent API  objects rather than monolithic machine images.These challenges should be understood and addressed to ensure that back up and restore operations preserve application functionality across failure scenarios.
+Backing up Kubernetes resources introduces challenges that do not exist in traditional VM based data protection because Kubernetes workloads consist of multiple independent API objects rather than monolithic machine images.These challenges should be understood and addressed to ensure that backup and restore operations preserve application functionality across failure scenarios.
 
 Kubernetes resources depend on other resources through direct and indirect relationships. For example, a Stateful Set references a Persistence Volume Claim. A Deployment may reference a Config Map or Secret. A Pod may reference a Service Account that in turn may reference a Secret containing credentials.
 
@@ -208,13 +208,13 @@ Understanding Kubernetes Resources
 Backup Strategies 
 
 1. Namespace-level Backup   
-* Back up all resources in a namespace to capture the complete application context.
+* Backup all resources in a namespace to capture the complete application context.
 
 2. Label-based Backup   
-* Use Labels to selectively back up only resources belonging to a specific application.
+* Use Labels to selectively backup only resources belonging to a specific application.
 
 3.  Resource Type Segmentation   
-* Some team may choose to back up stateful resources (PVCs, CRDs) separate from stateless  resources (Deployment, Services)
+* Some team may choose to backup stateful resources (PVCs, CRDs) separate from stateless  resources (Deployment, Services)
 
 
 4. Challenges and Considerations
@@ -396,7 +396,7 @@ CRD Versioning
 
 CRDS define the structure, validation rules, and API versions of custom resources. When a CRD is changed or upgraded, the custom resources that depend on it may also be affected.
 
-This is important for back up and restore because a custom resource may have been created using one API version, while the destination cluster may use a newer version. The restore process must therefore ensure that the destination cluster has a compatible CRD and schema before restoring the associated resources.
+This is important for backup and restore because a custom resource may have been created using one API version, while the destination cluster may use a newer version. The restore process must therefore ensure that the destination cluster has a compatible CRD and schema before restoring the associated resources.
 
 In practice, backup  and recovery should account for both the CRD definition and the custom resources that use it . The CRD should  generally be restored and established before its dependent custom resources are restored. When CRD version schemas have changed between the source and destination clusters, compatibility and required version conversion should also be verified.
 
@@ -417,7 +417,7 @@ CRD versioning introduces several considerations for data protection:
   
 
 
-Back up Strategy 
+Backup Strategy 
 
 A robust backup strategy should treat a CRD and its associated custom resources as related objects rather than independent resources.
 
@@ -448,7 +448,7 @@ Backup windows define the schedule periods and duration of backup operations. Ba
 
 **1\.**  Application Consistency 
 
-Stateful applications, such as databases, may continue to process transactions and write data while a backup is in progress. Capturing data during active writes can result in inconsistent back up if related data is captured at different points in time.
+Stateful applications, such as databases, may continue to process transactions and write data while a backup is in progress. Capturing data during active writes can result in inconsistent backup if related data is captured at different points in time.
 
 Backup procedures should account for application activity and , where necessary , coordinate backup operations with application Operators or quiescing mechanisms to ensure that application data is captured in a consistent state. 
 
@@ -509,7 +509,7 @@ Recovering individual resources is sometimes useful to correct a single piece of
 
 #### Recovering from inconsistency
 
-Recovery from an  inconsistent backup may require the use of an earlier known-consistent back up or application-specific recovery mechanisms. For stateful workloads, recovery procedures should validate the consistency of related data before the application is returned to service. Where supported, transaction logs, application recovery mechanism, or coordinated snapshots may be used to restore the application to a consistent state. 
+Recovery from an  inconsistent backup may require the use of an earlier known-consistent backup or application-specific recovery mechanisms. For stateful workloads, recovery procedures should validate the consistency of related data before the application is returned to service. Where supported, transaction logs, application recovery mechanism, or coordinated snapshots may be used to restore the application to a consistent state. 
 
 #### Test restores
 
@@ -778,23 +778,22 @@ Operators are responsible for managing the lifecycle of Kubernetes applications,
 * Suspending scaling operations  
 * Disabling automated upgrades or configurations changes   
 * Preventing scheduled maintenance tasks  
-* Temporarily suspending application write activity when necessary to achieve a consistent back up state.
+* Temporarily suspending application write activity when necessary to achieve a consistent
+backup state.
 
 Once the backup or restore operation completes, the Operator should safely resume normal reconciliation without manual intervention.
 
 2. Application Aware Backup Hooks  
-   Operators should expose hooks or APIs that allow backup applications to perform applications-specific actions, such as committing in-flight transactions, flushing caches, or triggering database dumps. This ensures that backups capture data in a consistent and recoverable state.  
+Operators should expose hooks or APIs that allow backup applications to perform applications-specific actions, such as committing in-flight transactions, flushing caches, or triggering database dumps. This ensures that backups capture data in a consistent and recoverable state.  
      
      
-   Examples include:  
+Examples include:  
      
 * Pausing write operations  
 * Flushing in-memory cache  
 * Committing or completing in-flight transactions  
 * Triggering database snapshots or checkpoints  
 * Exporting application metadata for recovery  
-    
-    
     
 3. Restore Coordination
 
@@ -825,13 +824,13 @@ Applications that support disaster recovery often rely on asynchronous or synchr
 
 Hooks are particularly important in Kubernetes workloads, where crash consistent backups may not provide sufficient data integrity. A crash-consistent snapshot captures data exactly as it is at an instant in time. Although this approach may be adequate for some workloads, applications such as databases, messages queues and distributed systems, often maintain data in memory, maintain pending transactions, and process write operations asynchronously. Without proper coordination these applications may require lengthy recovery procedures or, in some cases, experience data corruption or transaction loss.
 
-Backup hooks help place an application into an application consistent state before the data is snapshotted or otherwise backed up and then return the application to operation if necessary. This process ensures that in-flight transactions are completed, cached data is flushed from memory to persistent storage, and write operations are temporarily paused. By coordinating these actions with the backup process, hooks significantly improve the reliability and recoverability of back ups.
+Backup hooks help place an application into an application consistent state before the data is snapshotted or otherwise backed up and then return the application to operation if necessary. This process ensures that in-flight transactions are completed, cached data is flushed from memory to persistent storage, and write operations are temporarily paused. By coordinating these actions with the backup process, hooks significantly improve the reliability and recoverability of backups.
 
 Since hooks execute automatically and can directly impact production workloads they should be carefully designed, tested,  and properly documented before deployment. Misconfigured hooks can introduce downtime, fail silently or leave applications in a degraded state.
 
 Regular testing of both backup and restore procedures is recommended to ensure that the hook behavior remains consistent as applications and the Kubernetes environment continues to evolve.  
 
-Common pre-back up hook tasks include: 
+Common pre-backup hook tasks include: 
 
 * Flushing application caches and memory buffers to disk  
 * Rolling back or committing  outstanding database transactions  
@@ -870,7 +869,7 @@ Kubernetes equivalent:
 
 ## Key considerations when migrating from a legacy environment to Kubernetes
 
-Migrating from a VM centric environment into Kubernetes requires a shift in how data protection, back up and recovery are implemented. The key is understanding what each legacy practice and finding the Kubernetes native equivalent at the appropriate layer. A common point of failure is attempting  to replicate VM-era practices directly instead of implementing equivalent controls using kubernetes-native mechanisms.
+Migrating from a VM centric environment into Kubernetes requires a shift in how data protection, backup and recovery are implemented. The key is understanding what each legacy practice and finding the Kubernetes native equivalent at the appropriate layer. A common point of failure is attempting  to replicate VM-era practices directly instead of implementing equivalent controls using kubernetes-native mechanisms.
 
 Replacing Traditional VM Snapshots and backups in Kubernetes environment. Traditional VM snapshots and backup strategies are designed for monolithic infrastructure where applications, operating systems and data are tightly coupled in a single image. Kubernetes introduces a fundamental model based on containerized work loads, declarative configuration and decoupled state.  As a result, VM-centric protection mechanisms are neither sufficient nor optimal for Kubernetes.
 
@@ -909,9 +908,9 @@ In Kubernetes,  there is no equivalent to a VM snapshot, because:
 * Compute is ephemeral by design  
 * Storage is decoupled from workloads
 
-Instead snapshot and back up responsibilities are distributed across layers.
+Instead snapshot and backup responsibilities are distributed across layers.
 
-Kubernetes replacement for VM snapshot and back up.
+Kubernetes replacement for VM snapshot and backup.
 
 1. Persistent Volume (PV) snapshots  
    What is replaces:  
